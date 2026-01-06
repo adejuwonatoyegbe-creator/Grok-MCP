@@ -1,107 +1,47 @@
-import os
-from dotenv import load_dotenv
-import json
-import base64
 from pathlib import Path
-from typing import List, Dict, Optional, Any
-import httpx
-from datetime import datetime, timedelta
-from mcp.server.fastmcp import FastMCP, Image
-from .utils import (
-    encode_image_to_base64,
-    create_client,
-    is_reasoning_model,
-    is_vision_model,
-    get_model_timeout,
-    XAI_API_KEY,
-)
+from typing import List, Optional
+from datetime import datetime
+from mcp.server.fastmcp import FastMCP
+from xai_sdk import Client
+from xai_sdk.chat import user, system, image
+from xai_sdk.tools import web_search as xai_web_search, x_search as xai_x_search, code_execution
+from .utils import encode_image_to_base64, extract_usage, build_params, XAI_API_KEY
 
 
-mcp = FastMCP(
-    name="Grok MCP Server",
-)
+mcp = FastMCP(name="Grok MCP Server")
 
-conversation_history: List[Dict[str, str]] = []
-
-# Tool descriptions were added so LLM can call tools more correctly 
 
 @mcp.tool()
-async def list_models() -> str:
-    """
-    Gets a list of all available Grok models from xAI.
+async def list_models():
     
-    This is super handy when you need to see what models are available to use.
-    You'll get the model ID, who owns it, and when it was created. Perfect for
-    checking if a new model is available or verifying what models you can access.
-    
-    Returns a formatted string with all the model details.
-    """
-    client = create_client()
-    response = await client.get("/models")
-    response.raise_for_status()
-    data = response.json()
-    
+    client = Client(api_key=XAI_API_KEY)
     models_info = []
-    for model in data.get("data", []):
-        model_id = model.get("id", "")
-        created_timestamp = model.get("created", 0)
-        owned_by = model.get("owned_by", "")
-        
-        # Convert Unix timestamp to date here
-        if created_timestamp:
-            created_date = datetime.fromtimestamp(created_timestamp).strftime("%Y-%m-%d")
-        else:
-            created_date = ""
-        
-        models_info.append(f"- {model_id} (Owner: {owned_by}, Created: {created_date})")
     
-    await client.aclose()
+    models_info.append("## Language Models")
+    for model in client.models.list_language_models():
+        models_info.append(f"- {model.name} ({model.created.ToDatetime().strftime('%d %B %Y')})")
     
-    return "Available Grok Models:\n" + "\n".join(models_info)
+    models_info.append("\n## Image Generation Models")
+    for model in client.models.list_image_generation_models():
+        models_info.append(f"- {model.name} ({model.created.ToDatetime().strftime('%d %B %Y')})")
+    
+    client.close()
+    return "\n".join(models_info)
+
 
 @mcp.tool()
 async def generate_image(
     prompt: str,
     n: int = 1,
-    response_format: str = "url",
+    image_format: str = "url",
     model: str = "grok-2-image-1212"
-) -> dict:
-    """
-    Creates AI-generated images using Grok's image generation models.
-    
-    Just describe what you want to see, and this tool will generate it. You can
-    create multiple variations at once by adjusting the 'n' parameter. The model
-    might revise your prompt to get better results - you'll see that in the response.
-    
-    Args:
-        prompt: What you want the image to show (be descriptive!)
-        n: How many images to generate (default is 1)
-        response_format: Either "url" for image links or "b64_json" for base64 data
-        model: Which image model to use (default is grok-2-image-1212)
-    
-    Returns a dict with the generated images and any revised prompt used.
-    """
-    
-    client = create_client()
-    request_data = {
-        "model": model,
-        "prompt": prompt,
-        "n": n,
-        "response_format": response_format
-    }
-    response = await client.post("/images/generations", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    await client.aclose()
-    
-    images = data.get("data", [])
-    
-    revised_prompt = images[0].get("revised_prompt", "")
-    
-    return {
-        "images": images,
-        "revised_prompt": revised_prompt
-    }
+    ):
+
+    client = Client(api_key=XAI_API_KEY)
+    images = client.image.sample_batch(model=model, prompt=prompt, n=n, image_format=image_format)
+    client.close()
+    return {"images": [{"url": img.url, "revised_prompt": img.prompt} for img in images]}
+
 
 @mcp.tool()
 async def chat_with_vision(
@@ -109,573 +49,386 @@ async def chat_with_vision(
     image_paths: Optional[List[str]] = None,
     image_urls: Optional[List[str]] = None,
     detail: str = "auto",
-    model: str = "grok-4-1-fast-non-reasoning"
-) -> str:
-    """
-    Analyzes images and answers questions about them using Grok's vision models.
+    model: str = "grok-4"
+):
+
+    client = Client(api_key=XAI_API_KEY)
+    chat = client.chat.create(model=model, store_messages=False)
     
-    This is your go-to tool when you need to understand what's in an image. You can
-    provide local image files, URLs, or both. Ask questions like "What's in this image?"
-    or "Read the text from this screenshot." Supports JPG, JPEG, and PNG formats.
-    
-    Args:
-        prompt: Your question or instruction about the image(s)
-        image_paths: List of local file paths to images (optional)
-        image_urls: List of image URLs from the web (optional)
-        detail: How closely to analyze ("auto", "low", or "high")
-        model: Which vision-capable model to use (default is grok-4-1-fast-non-reasoning)
-    
-    Returns the AI's response as a string describing or analyzing the images.
-    """
-    content_items = []
+    user_content = []
     if image_paths:
         for path in image_paths:
             ext = Path(path).suffix.lower().replace('.', '')
             if ext not in ["jpg", "jpeg", "png"]:
                 raise ValueError(f"Unsupported image type: {ext}")
             base64_img = encode_image_to_base64(path)
-            content_items.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{ext};base64,{base64_img}",
-                    "detail": detail
-                }
-            })
+            user_content.append(image(image_url=f"data:image/{ext};base64,{base64_img}", detail=detail))
+    
     if image_urls:
         for url in image_urls:
-            content_items.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": url,
-                    "detail": detail
-                }
-            })
-    if prompt:
-        content_items.append({
-            "type": "text",
-            "text": prompt
-        })
-    messages = [
-        {
-            "role": "user",
-            "content": content_items
-        }
-    ]
-    request_data = {
-        "model": model,
-        "messages": messages
+            user_content.append(image(image_url=url, detail=detail))
+    
+    user_content.append(prompt)
+    chat.append(user(*user_content))
+    response = chat.sample()
+    client.close()
+    
+    return {
+        "content": response.content,
+        "usage": {
+            "prompt_text_tokens": response.usage.prompt_text_tokens,
+            "prompt_image_tokens": response.usage.prompt_image_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "reasoning_tokens": response.usage.reasoning_tokens,
+            "total_tokens": response.usage.total_tokens,
+        } if response.usage else {},
     }
-    client = create_client()
-    response = await client.post("/chat/completions", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    await client.aclose()
-    return data["choices"][0]["message"]["content"]
+
 
 @mcp.tool()
 async def chat(
     prompt: str,
-    model: str = "grok-4-1-fast-non-reasoning",
+    model: str = "grok-4",
     system_prompt: Optional[str] = None,
-    use_conversation_history: bool = False,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    top_p: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    stop: Optional[List[str]] = None,
-    reasoning_effort: Optional[str] = None
-) -> str:
-    """
-    Basic chat completion with Grok models - your standard conversational AI tool.
-    
-    Use this for general questions, creative writing, coding help, or any text task.
-    You can optionally keep conversation history to maintain context across multiple
-    exchanges. For reasoning models, use the reasoning_effort parameter. For other
-    models, you have more control with penalties and stop sequences.
-    
-    Args:
-        prompt: What you want to ask or have the AI do
-        model: Which Grok model to use (default is grok-4-1-fast-non-reasoning)
-        system_prompt: Instructions for how the AI should behave (only used at start)
-        use_conversation_history: Keep context between messages (default False)
-        temperature: Creativity level 0-2 (higher = more creative)
-        max_tokens: Maximum length of response
-        top_p: Alternative to temperature for controlling randomness
-        presence_penalty: Penalize talking about same topics (-2.0 to 2.0)
-        frequency_penalty: Penalize repeating the same words (-2.0 to 2.0)
-        stop: List of sequences where the AI should stop generating
-        reasoning_effort: "low" or "high" for reasoning models only (grok-3-mini)
-    
-    Returns the AI's response as a string.
-    """
+    store_messages: bool = False
+):
 
-    global conversation_history
-    if not use_conversation_history:
-        conversation_history = []
-    
-    messages = []
-    
-    if system_prompt and len(conversation_history) == 0:
-        messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
-    
-    messages.extend(conversation_history)
-    
-    messages.append({
-        "role": "user",
-        "content": prompt
-    })
-    
-    request_data = {
-        "model": model,
-        "messages": messages
+    client = Client(api_key=XAI_API_KEY)
+    chat = client.chat.create(model=model, store_messages=store_messages)
+    if system_prompt:
+        chat.append(system(system_prompt))
+    chat.append(user(prompt))
+    response = chat.sample()
+    client.close()
+
+    return {
+        "content": response.content,
+        "usage": extract_usage(response),
     }
-    
-    if temperature is not None:
-        request_data["temperature"] = temperature
-    if max_tokens is not None:
-        request_data["max_tokens"] = max_tokens
-    if top_p is not None:
-        request_data["top_p"] = top_p
-    
-    is_reasoning = is_reasoning_model(model)
-    
-    if is_reasoning:
-        # reasoning_effort only for grok-3-mini
-        if reasoning_effort and model != "grok-4":
-            if reasoning_effort not in ["low", "high"]:
-                raise ValueError("reasoning_effort must be 'low' or 'high'")
-            request_data["reasoning_effort"] = reasoning_effort
-    else:
-        # These parameters only work with non reasoning models
-        if presence_penalty is not None:
-            request_data["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            request_data["frequency_penalty"] = frequency_penalty
-        if stop is not None:
-            request_data["stop"] = stop
-    
-    timeout = get_model_timeout(model)
-    client = create_client(timeout=timeout)
-    response = await client.post("/chat/completions", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    await client.aclose()
-    
-    assistant_response = data["choices"][0]["message"]["content"]
-    
-    if use_conversation_history:
-        conversation_history.append({
-            "role": "user",
-            "content": prompt
-        })
-        conversation_history.append({
-            "role": "assistant",
-            "content": assistant_response
-        })
-    
-    return assistant_response
+
 
 @mcp.tool()
 async def chat_with_reasoning(
     prompt: str,
-    model: str = "grok-4-1-fast-reasoning",
+    model: str = "grok-3-mini",
     system_prompt: Optional[str] = None,
-    reasoning_effort: Optional[str] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    top_p: Optional[float] = None
-) -> Dict[str, Any]:
-    """
-    Uses Grok's reasoning models to think through complex problems step-by-step.
+    reasoning_effort: Optional[str] = None
+):
+    #for seeing reasoning content besides grok-3-mini model use stateful chat
+
+    client = Client(api_key=XAI_API_KEY, timeout=3600)
     
-    This is perfect for math problems, logic puzzles, or anything requiring careful
-    thinking. You'll get both the final answer AND the reasoning process that led to
-    it. Think of it like showing your work in math class. Only works with reasoning
-    models: grok-4, grok-3-mini, grok-3-mini-fast, or grok-4-1-fast-reasoning.
+    chat_params = {"model": model}
+    if reasoning_effort:
+        chat_params["reasoning_effort"] = reasoning_effort
     
-    Args:
-        prompt: The problem or question you need solved
-        model: Which reasoning model to use (default is grok-3-mini)
-        system_prompt: Instructions for how the AI should approach the problem
-        reasoning_effort: "low" or "high" (only for grok-3-mini models, not grok-4)
-        temperature: Controls randomness 0-2 (lower = more focused)
-        max_tokens: Maximum length of response
-        top_p: Alternative way to control randomness
-    
-    Returns a dict with 'content' (the answer), 'reasoning_content' (the thinking
-    process), and 'usage' (token counts).
-    """
-    
-    if model not in ["grok-4", "grok-3-mini", "grok-3-mini-fast", "grok-4-1-fast-reasoning"]:
-        raise ValueError(f"Model {model} isn't a reasoning model. Use 'grok-4', 'grok-3-mini', 'grok-3-mini-fast', or 'grok-4-1-fast-reasoning'.")
-    
-    messages = []
-    
+    chat = client.chat.create(**chat_params)
     if system_prompt:
-        messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
+        chat.append(system(system_prompt))
+    chat.append(user(prompt))
+    response = chat.sample()
+    client.close()
     
-    messages.append({
-        "role": "user",
-        "content": prompt
-    })
-    
-    request_data = {
-        "model": model,
-        "messages": messages
+    return {
+        "content": response.content,
+        "reasoning_content": getattr(response, 'reasoning_content', None),
+        "usage": extract_usage(response),
     }
-    
-    # optional parameters
-    if temperature is not None:
-        request_data["temperature"] = temperature
-    if max_tokens is not None:
-        request_data["max_tokens"] = max_tokens
-    if top_p is not None:
-        request_data["top_p"] = top_p
-    
-    if reasoning_effort and model != "grok-4":
-        if reasoning_effort not in ["low", "high"]:
-            raise ValueError("reasoning_effort must be 'low' or 'high'")
-        request_data["reasoning_effort"] = reasoning_effort
-    
-    client = create_client(timeout=3600.0)
-    response = await client.post("/chat/completions", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    await client.aclose()
-    
-    choice = data["choices"][0]
-    message = choice["message"]
-    
-    result = {
-        "content": message.get("content", ""),
-        "reasoning_content": message.get("reasoning_content", ""),
-        "usage": data.get("usage", {})
-    }
-    
-    return result
-    
+
+
 @mcp.tool()
-async def live_search(
+async def web_search(
     prompt: str,
-    model: str = "grok-4-1-fast-non-reasoning",
-    mode: str = "on",
-    return_citations: bool = True,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    max_search_results: int = 20,
-    country: Optional[str] = None,
-    rss_links: Optional[List[str]] = None,
-    sources: Optional[List[Dict[str, Any]]] = None,
-    system_prompt: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Searches the web in real-time and provides answers with sources.
+    model: str = "grok-4-1-fast",
+    allowed_domains: Optional[List[str]] = None,
+    excluded_domains: Optional[List[str]] = None,
+    enable_image_understanding: bool = False,
+    include_inline_citations: bool = False,
+    max_turns: Optional[int] = None
+):
+
+    if allowed_domains and excluded_domains:
+        raise ValueError("Cannot specify both allowed_domains and excluded_domains")
+    if allowed_domains and len(allowed_domains) > 5:
+        raise ValueError("allowed_domains max 5")
+    if excluded_domains and len(excluded_domains) > 5:
+        raise ValueError("excluded_domains max 5")
     
-    This is like having Grok browse the internet for you. It searches the web, news,
-    X (Twitter), and even RSS feeds, then synthesizes everything into a comprehensive
-    answer. You'll get citations so you can verify the information. Great for current
-    events, fact-checking, or anything requiring up-to-date information.
+    client = Client(api_key=XAI_API_KEY)
     
-    Args:
-        prompt: Your question or search query
-        model: Which Grok model to use (default is grok-4)
-        mode: "on" to enable search (default), "off" to disable
-        return_citations: Whether to include source links (default True)
-        from_date: Start date for search results (YYYY-MM-DD format)
-        to_date: End date for search results (YYYY-MM-DD format)
-        max_search_results: How many sources to check (default 20)
-        country: Filter results by country code (e.g., "us", "uk")
-        rss_links: List of RSS feed URLs to include
-        sources: Custom source configuration (overrides country/rss_links if provided)
-        system_prompt: Instructions for how to handle the search results
+    tool_params = build_params(
+        allowed_domains=allowed_domains,
+        excluded_domains=excluded_domains,
+        enable_image_understanding=enable_image_understanding,
+    )
     
-    Returns a dict with 'content' (the answer), 'citations' (sources used),
-    'usage' (tokens), and 'num_sources_used'.
-    """
+    include_options = ["verbose_streaming"]
+    if include_inline_citations:
+        include_options.append("inline_citations")
     
-    messages = []
+    chat_params = {"model": model, "tools": [xai_web_search(**tool_params)], "include": include_options}
+    if max_turns:
+        chat_params["max_turns"] = max_turns
     
-    if system_prompt:
-        messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
+    chat = client.chat.create(**chat_params)
+    chat.append(user(prompt))
     
-    messages.append({
-        "role": "user",
-        "content": prompt
-    })
+    for response, chunk in chat.stream():
+        pass
     
-    search_params: Dict[str, Any] = {
-        "mode": mode,
-        "return_citations": return_citations
-    }
-    
-    if from_date:
-        search_params["from_date"] = from_date
-    if to_date:
-        search_params["to_date"] = to_date
-    if max_search_results != 20:
-        search_params["max_search_results"] = max_search_results
-    
-    if sources:
-        search_params["sources"] = sources
-    elif country or rss_links:
-        default_sources = []
-        
-        if country:
-            default_sources.extend([
-                {"type": "web", "country": country},
-                {"type": "news", "country": country},
-                {"type": "x"}
-            ])
-        else:
-            default_sources.extend([
-                {"type": "web"},
-                {"type": "news"},
-                {"type": "x"}
-            ])
-        
-        if rss_links:
-            for link in rss_links:
-                default_sources.append({"type": "rss", "links": [link]})
-        
-        search_params["sources"] = default_sources
-    
-    request_data = {
-        "model": model,
-        "messages": messages,
-        "search_parameters": search_params
-    }
-    
-    client = create_client()
-    response = await client.post("/chat/completions", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    
-    choice = data["choices"][0]
     result = {
-        "content": choice["message"]["content"],
-        "usage": data.get("usage", {}),
+        "content": response.content,
+        "citations": list(response.citations) if response.citations else [],
+        "tool_calls": [{"name": tc.function.name, "arguments": tc.function.arguments} for tc in response.tool_calls],
+        "usage": extract_usage(response),
+        "server_side_tool_usage": dict(response.server_side_tool_usage) if response.server_side_tool_usage else {}
     }
     
-    if return_citations and "citations" in choice["message"]:
-        result["citations"] = choice["message"]["citations"]
+    if include_inline_citations and response.inline_citations:
+        result["inline_citations"] = [
+            {"id": c.id, "url": c.web_citation.url if c.HasField("web_citation") else c.x_citation.url}
+            for c in response.inline_citations
+        ]
     
-    if "num_sources_used" in data.get("usage", {}):
-        result["num_sources_used"] = data["usage"]["num_sources_used"]
-    
-    await client.aclose()
+    client.close()
     return result
 
+
+@mcp.tool()
+async def x_search(
+    prompt: str,
+    model: str = "grok-4-1-fast",
+    allowed_x_handles: Optional[List[str]] = None,
+    excluded_x_handles: Optional[List[str]] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
+    include_inline_citations: bool = False,
+    max_turns: Optional[int] = None
+):
+
+    if allowed_x_handles and excluded_x_handles:
+        raise ValueError("Cannot specify both allowed_x_handles and excluded_x_handles")
+    if allowed_x_handles and len(allowed_x_handles) > 10:
+        raise ValueError("allowed_x_handles max 10")
+    if excluded_x_handles and len(excluded_x_handles) > 10:
+        raise ValueError("excluded_x_handles max 10")
+    
+    client = Client(api_key=XAI_API_KEY)
+    
+    tool_params = build_params(
+        allowed_x_handles=allowed_x_handles,
+        excluded_x_handles=excluded_x_handles,
+        from_date=datetime.strptime(from_date, "%d-%m-%Y") if from_date else None,
+        to_date=datetime.strptime(to_date, "%d-%m-%Y") if to_date else None,
+        enable_image_understanding=enable_image_understanding,
+        enable_video_understanding=enable_video_understanding,
+    )
+    
+    include_options = ["verbose_streaming"]
+    if include_inline_citations:
+        include_options.append("inline_citations")
+    
+    chat_params = {"model": model, "tools": [xai_x_search(**tool_params)], "include": include_options}
+    if max_turns:
+        chat_params["max_turns"] = max_turns
+    
+    chat = client.chat.create(**chat_params)
+    chat.append(user(prompt))
+    
+    for response, chunk in chat.stream():
+        pass
+    
+    result = {
+        "content": response.content,
+        "citations": list(response.citations) if response.citations else [],
+        "tool_calls": [{"name": tc.function.name, "arguments": tc.function.arguments} for tc in response.tool_calls],
+        "usage": extract_usage(response),
+        "server_side_tool_usage": dict(response.server_side_tool_usage) if response.server_side_tool_usage else {}
+    }
+    
+    if include_inline_citations and response.inline_citations:
+        result["inline_citations"] = [
+            {"id": c.id, "url": c.x_citation.url if c.HasField("x_citation") else c.web_citation.url}
+            for c in response.inline_citations
+        ]
+    
+    client.close()
+    return result
+
+
+@mcp.tool()
+async def agentic_search(
+    prompt: str,
+    model: str = "grok-4-1-fast",
+    use_web_search: bool = True,
+    use_x_search: bool = True,
+    use_code_execution: bool = False,
+    allowed_domains: Optional[List[str]] = None,
+    excluded_domains: Optional[List[str]] = None,
+    allowed_x_handles: Optional[List[str]] = None,
+    excluded_x_handles: Optional[List[str]] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
+    include_inline_citations: bool = False,
+    max_turns: Optional[int] = None
+):
+
+    if not use_web_search and not use_x_search and not use_code_execution:
+        raise ValueError("At least one tool must be enabled")
+    
+    client = Client(api_key=XAI_API_KEY)
+    tools = []
+    
+    if use_web_search:
+        web_params = build_params(
+            allowed_domains=allowed_domains,
+            excluded_domains=excluded_domains,
+            enable_image_understanding=enable_image_understanding,
+        )
+        tools.append(xai_web_search(**web_params))
+    
+    if use_x_search:
+        x_params = build_params(
+            allowed_x_handles=allowed_x_handles,
+            excluded_x_handles=excluded_x_handles,
+            from_date=datetime.strptime(from_date, "%d-%m-%Y") if from_date else None,
+            to_date=datetime.strptime(to_date, "%d-%m-%Y") if to_date else None,
+            enable_image_understanding=enable_image_understanding,
+            enable_video_understanding=enable_video_understanding,
+        )
+        tools.append(xai_x_search(**x_params))
+    
+    if use_code_execution:
+        tools.append(code_execution())
+    
+    include_options = ["verbose_streaming"]
+    if include_inline_citations:
+        include_options.append("inline_citations")
+    
+    chat_params = {"model": model, "tools": tools, "include": include_options}
+    if max_turns:
+        chat_params["max_turns"] = max_turns
+    
+    chat = client.chat.create(**chat_params)
+    chat.append(user(prompt))
+    
+    for response, chunk in chat.stream():
+        pass
+    
+    result = {
+        "content": response.content,
+        "citations": list(response.citations) if response.citations else [],
+        "tool_calls": [{"name": tc.function.name, "arguments": tc.function.arguments} for tc in response.tool_calls],
+        "usage": extract_usage(response),
+        "server_side_tool_usage": dict(response.server_side_tool_usage) if response.server_side_tool_usage else {}
+    }
+    
+    if include_inline_citations and response.inline_citations:
+        result["inline_citations"] = [
+            {"id": c.id, "url": c.web_citation.url if c.HasField("web_citation") else c.x_citation.url}
+            for c in response.inline_citations
+        ]
+    
+    client.close()
+    return result
+
+
+@mcp.tool()
+async def code_executor(
+    prompt: str,
+    model: str = "grok-4-1-fast",
+    include_code_output: bool = True,
+    max_turns: Optional[int] = None
+):
+
+    client = Client(api_key=XAI_API_KEY)
+    
+    include_options = ["verbose_streaming"]
+    if include_code_output:
+        include_options.append("code_execution_call_output")
+    
+    chat_params = {"model": model, "tools": [code_execution()], "include": include_options}
+    if max_turns:
+        chat_params["max_turns"] = max_turns
+    
+    chat = client.chat.create(**chat_params)
+    chat.append(user(prompt))
+    
+    code_outputs = []
+    for response, chunk in chat.stream():
+        if hasattr(chunk, 'tool_outputs'):
+            for tool_output in chunk.tool_outputs:
+                if tool_output.content:
+                    code_outputs.append(tool_output.content)
+    
+    result = {
+        "content": response.content,
+        "tool_calls": [{"name": tc.function.name, "arguments": tc.function.arguments} for tc in response.tool_calls],
+        "usage": extract_usage(response),
+        "server_side_tool_usage": dict(response.server_side_tool_usage) if response.server_side_tool_usage else {}
+    }
+    
+    if code_outputs:
+        result["code_outputs"] = code_outputs
+    
+    client.close()
+    return result
 
 
 @mcp.tool()
 async def stateful_chat(
     prompt: str,
     response_id: Optional[str] = None,
-    model: str = "grok-4-1-fast-non-reasoning",
-    system_prompt: Optional[str] = None,
-    include_reasoning: bool = False,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None
-) -> Dict[str, Any]:
-    """
-    Have ongoing conversations that are saved on xAI's servers for up to 30 days.
+    model: str = "grok-4",
+    system_prompt: Optional[str] = None
+):
+    client = Client(api_key=XAI_API_KEY)
     
-    Unlike regular chat, this maintains conversation history server-side, so you can
-    continue conversations across sessions without managing history yourself. Start a
-    new conversation without a response_id, then use the returned ID to continue it
-    later. Super useful for long-running projects or when you want to pick up where
-    you left off days later.
-    
-    Args:
-        prompt: What you want to say in this turn of the conversation
-        response_id: ID from a previous response to continue that conversation (optional)
-        model: Which Grok model to use (default is grok-4-1-fast-non-reasoning)
-        system_prompt: Instructions for the AI (only used when starting new conversation)
-        include_reasoning: Get a summary of the model's thinking process (default False)
-        temperature: Controls creativity 0-2
-        max_tokens: Maximum length of response
-    
-    Returns a dict with 'content' (the response), 'response_id' (save this to continue
-    later!), 'status', 'model', 'usage', 'stored_until' (expiration date), and
-    optionally 'reasoning' if you requested it.
-    """
-    
-    input_messages = []
-    
-    # System prompt only for new conversations (not when continuing)
-    if system_prompt and not response_id:
-        input_messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
-    
-    input_messages.append({
-        "role": "user",
-        "content": prompt
-    })
-    
-    request_data: Dict[str, Any] = {
-        "model": model,
-        "input": input_messages,
-        "store": True 
-    }
-    
+    chat_params = {"model": model, "store_messages": True}
     if response_id:
-        request_data["previous_response_id"] = response_id
+        chat_params["previous_response_id"] = response_id
     
-    # Optional parameters
-    if temperature is not None:
-        request_data["temperature"] = temperature
-    if max_tokens is not None:
-        request_data["max_output_tokens"] = max_tokens
+    chat = client.chat.create(**chat_params)
+    if system_prompt and not response_id:
+        chat.append(system(system_prompt))
+    chat.append(user(prompt))
     
-    if include_reasoning:
-        request_data["reasoning"] = {
-            "include": ["encrypted_content"]
-        }
+    response = chat.sample()
+    client.close()
     
-    timeout = get_model_timeout(model)
-    
-    client = create_client(timeout=timeout, use_state=True)
-    
-    
-    response = await client.post("/v1/responses", json=request_data)
-    response.raise_for_status()
-    data = response.json()
-    await client.aclose()
-    
-    output = data.get("output", [])
-    content = ""
-    reasoning_summary = None
-    
-    for item in output:
-        if item.get("type") == "message" and item.get("role") == "assistant":
-            for content_item in item.get("content", []):
-                if content_item.get("type") == "output_text":
-                    content = content_item.get("text", "")
-                    break
-        elif item.get("type") == "reasoning":
-            for summary_item in item.get("summary", []):
-                if summary_item.get("type") == "summary_text":
-                    reasoning_summary = summary_item.get("text", "")
-                    break
-    
-    expiration = datetime.now() + timedelta(days=30)
-    
-    result = {
-        "content": content,
-        "response_id": data.get("id"),
-        "status": data.get("status"),
-        "model": data.get("model"),
-        "usage": data.get("usage", {}),
-        "stored_until": expiration.strftime("%Y-%m-%d"),
-        "continued_from": response_id if response_id else None
+    return {
+        "content": response.content,
+        "response_id": response.id,
+        "usage": extract_usage(response)
     }
-    
-    if reasoning_summary:
-        result["reasoning"] = reasoning_summary
-    
-    return result
 
 
 @mcp.tool()
-async def retrieve_stateful_response(response_id: str) -> Dict[str, Any]:
-    """
-    Fetches a previously saved stateful conversation response from xAI's servers.
-    
-    Use this to look up old conversations or check what was said in a previous
-    exchange. Helpful if you lost track of a conversation or want to review past
-    interactions. Works with any response_id from the last 30 days.
-    
-    Args:
-        response_id: The ID of the response you want to retrieve
-    
-    Returns a dict with all the details: 'content', 'response_id', 'model',
-    'created_at', 'status', 'reasoning' (if available), 'usage', and
-    'previous_response_id' (if it was part of a chain).
-    """
-    
-    client = create_client(use_state=True)
-    
-    response = await client.get(f"/v1/responses/{response_id}")
-    response.raise_for_status()
-    data = response.json()
-    
-    output = data.get("output", [])
-    content = ""
-    reasoning = None
-    
-    #for getting text of reasoning or pass reasoning 
-    for item in output:
-        if item.get("type") == "message" and item.get("role") == "assistant":
-            for content_item in item.get("content", []):
-                if content_item.get("type") == "output_text":
-                    content = content_item.get("text", "")
-                    break
-        elif item.get("type") == "reasoning":
-            for summary_item in item.get("summary", []):
-                if summary_item.get("type") == "summary_text":
-                    reasoning = summary_item.get("text", "")
-                    break
-    
-    await client.aclose()
-    
-    return {
-        "response_id": data.get("id"),
-        "model": data.get("model"),
-        "created_at": datetime.fromtimestamp(data.get("created_at", 0)).isoformat(),
-        "status": data.get("status"),
-        "content": content,
-        "reasoning": reasoning,
-        "usage": data.get("usage", {}),
-        "previous_response_id": data.get("previous_response_id"),
-        "store": data.get("store", False)
-    }
+async def retrieve_stateful_response(response_id: str):
+    client = Client(api_key=XAI_API_KEY)
+    responses = client.chat.get_stored_completion(response_id)
+    client.close()
+    if not responses:
+        return {"error": f"No response found for id {response_id}"}
+    response = responses[0] if isinstance(responses, list) else responses
+    return {"response_id": response.id, "content": response.content}
 
 
 @mcp.tool()
 async def delete_stateful_response(response_id: str):
-    """
-    Permanently deletes a stateful conversation response from xAI's servers.
-    
-    Use this when you want to remove a conversation for privacy or cleanup purposes.
-    Once deleted, you won't be able to retrieve it or continue from it. This is
-    permanent, so make sure you really want to delete it!
-    
-    Args:
-        response_id: The ID of the response you want to delete
-    
-    Returns a dict confirming the deletion with 'response_id', 'deleted' (True/False),
-    and a confirmation message.
-    """
-    
-    client = create_client(use_state=True)
-    
-    response = await client.delete(f"/v1/responses/{response_id}")
-    response.raise_for_status()
-    data = response.json()
-    
-    await client.aclose()
-    
-    return {
-        "response_id": data.get("id"),
-        "deleted": data.get("deleted", False),
-        "message": f"Response {response_id} deleted from xAI servers"
-    }
+    client = Client(api_key=XAI_API_KEY)
+    client.chat.delete_stored_completion(response_id)
+    client.close()
+    return {"response_id": response_id, "deleted": True}
 
 
 def main():
     mcp.run(transport='stdio')
+
 
 if __name__ == "__main__":
     main()
