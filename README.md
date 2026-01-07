@@ -1,6 +1,7 @@
 # Grok-MCP
 
-MCP server for xAI's Grok API, can do image understanding, image generation, live web search, and reasoning models.
+MCP server for xAI's Grok API with agentic tool calling, image generation, vision, and reasoning models.
+
 
 <a href="https://glama.ai/mcp/servers/@merterbak/Grok-MCP">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@merterbak/Grok-MCP/badge" />
@@ -8,13 +9,12 @@ MCP server for xAI's Grok API, can do image understanding, image generation, liv
 
 ## Features
 
+- **Agentic Tool Calling**: Web search, X search, and code execution with multi-step reasoning
 - **Multiple Grok Models**: Access to Grok-4.1-Fast-Reasoning, Grok-4.1-Fast-Non-Reasoning, Grok-4-Fast, Grok-3-Mini, and more
 - **Image Generation**: Create images using Grok's image generation model
 - **Vision Capabilities**: Analyze images with Grok's vision models
-- **Live Web Search**: Real time web search with citations from news, web, X, and RSS feeds
 - **Reasoning Models**: Advanced reasoning with extended thinking models (Grok-4.1-Fast-Reasoning, Grok-3-Mini, Grok-4)
 - **Stateful Conversations**: Use this newly released feature to maintain conversation context as id across multiple requests
-- **Conversation History**: Set it on or off to use prior context 
 
 ## Prerequisites
 
@@ -111,97 +111,152 @@ mcp dev main.py
 ```
 
 
-## Available Tools
+# Available Tools
 
-### 1. `list_models`
-List all available Grok models with creation dates and ownership information.
 
-### 2. `chat`
-Standard chat completion with extensive customization options.
+### `list_models`
+List all available Grok models.
 
-**Parameters:**
-- `prompt` (required): Your message
-- `model`: Model to use (default: "grok-4-1-fast-non-reasoning")
-- `system_prompt`: Optional system instruction
-- `use_conversation_history`: Enable multi-turn conversations
-- `temperature`, `max_tokens`, `top_p`: Generation parameters
-- `presence_penalty`, `frequency_penalty`, `stop`: Advanced control
-- `reasoning_effort`: For reasoning models ("low" or "high")
+---
 
-### 3. `chat_with_reasoning`
-Get detailed reasoning along with the response.
+### `chat`
+Standard chat completion.
 
-**Parameters:**
-- `prompt` (required): Your question or task
-- `model`: "grok-4", "grok-3-mini", "grok-3-mini-fast", or "grok-4-1-fast-reasoning" (default: "grok-4-1-fast-reasoning")
-- `reasoning_effort`: "low" or "high" (not for grok-4)
-- `system_prompt`, `temperature`, `max_tokens`, `top_p`
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Your message |
+| `model` | str | `grok-4` | Model to use |
+| `system_prompt` | str | None | System instruction |
+| `store_messages` | bool | False | Enable conversation history |
 
-**Returns:** Content, reasoning content, and usage statistics
+---
 
-### 4. `chat_with_vision`
-Analyze images with natural language queries.
+### `chat_with_vision`
+Analyze images with text.
 
-**Parameters:**
-- `prompt` (required): Your question about the image(s)
-- `image_paths`: List of local image file paths
-- `image_urls`: List of image URLs
-- `detail`: "auto", "low", or "high"
-- `model`: Vision-capable model (default: "grok-4-1-fast-non-reasoning")
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Question about the image |
+| `image_paths` | List[str] | None | Local image file paths |
+| `image_urls` | List[str] | None | Image URLs |
+| `detail` | str | `auto` | `auto`, `low`, or `high` |
+| `model` | str | `grok-4` | Vision model |
 
-**Supported formats:** JPG, JPEG, PNG
+**Returns:** Content + usage with `prompt_image_tokens`
 
-### 5. `generate_image`
-Create images from text descriptions.
+---
 
-**Parameters:**
-- `prompt` (required): Image description
-- `n`: Number of images to generate (default: 1)
-- `response_format`: "url" or "b64_json"
-- `model`: Image generation model (default: "grok-2-image-1212")
+### `chat_with_reasoning`
+Get detailed reasoning with the response.
 
-**Returns:** Generated images and revised prompt
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Your question |
+| `model` | str | `grok-3-mini` | Reasoning model |
+| `reasoning_effort` | str | None | `low` or `high` |
 
-### 6. `live_search`
-Search the web in real-time with source citations.
+**Returns:** Content, reasoning_content, usage (with reasoning_tokens)
 
-**Parameters:**
-- `prompt` (required): Your search query
-- `model`: Model to use (default: "grok-4-1-fast-non-reasoning")
-- `mode`: "on" or "off"
-- `return_citations`: Include source citations (default: true)
-- `from_date`, `to_date`: Date range (YYYY-MM-DD)
-- `max_search_results`: Max results to fetch (default: 20)
-- `country`: Country code for localized search
-- `rss_links`: List of RSS feed URLs to search
-- `sources`: Custom source configuration
+---
 
-**Returns:** Content, citations, usage stats, and number of sources used
+### `generate_image`
+Create images from text.
 
-### 7. `stateful_chat`
-Maintain conversation state across multiple requests on xAI servers.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Image description |
+| `n` | int | 1 | Number of images |
+| `image_format` | str | `url` | `url` or `b64_json` |
+| `model` | str | `grok-2-image-1212` | Image model |
 
-**Parameters:**
-- `prompt` (required): Your message
-- `response_id`: Previous response ID to continue conversation
-- `model`: Model to use (default: "grok-4-1-fast-non-reasoning")
-- `system_prompt`: System instruction (only for new conversations)
-- `include_reasoning`: Include reasoning summary
-- `temperature`, `max_tokens`
+---
 
-**Returns:** Response with ID for continuing the conversation (stored for 30 days)
+### `web_search`
+Agentic web search with autonomous research.
 
-### 8. `retrieve_stateful_response`
-Retrieve a previously stored conversation response.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Search query |
+| `model` | str | `grok-4-1-fast` | Model |
+| `allowed_domains` | List[str] | None | Restrict to domains (max 5) |
+| `excluded_domains` | List[str] | None | Exclude domains (max 5) |
+| `enable_image_understanding` | bool | False | Analyze images in results |
+| `include_inline_citations` | bool | False | Embed citations in text |
+| `max_turns` | int | None | Limit reasoning turns |
 
-**Parameters:**
-- `response_id` (required): The response ID to retrieve
+**Returns:** Content, citations, tool_calls, usage
 
-### 9. `delete_stateful_response`
-Delete a stored conversation from xAI servers.
+---
 
-**Parameters:**
-- `response_id` (required): The response ID to delete
+### `x_search`
+Agentic X (Twitter) search.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Search query |
+| `model` | str | `grok-4-1-fast` | Model |
+| `allowed_x_handles` | List[str] | None | Only these handles (max 10) |
+| `excluded_x_handles` | List[str] | None | Exclude handles (max 10) |
+| `from_date` | str | None | Start date (DD-MM-YYYY) |
+| `to_date` | str | None | End date (DD-MM-YYYY) |
+| `enable_image_understanding` | bool | False | Analyze images |
+| `enable_video_understanding` | bool | False | Analyze videos |
+| `include_inline_citations` | bool | False | Embed citations |
+| `max_turns` | int | None | Limit turns |
+
+**Returns:** Content, citations, tool_calls, usage
+
+---
+
+### `agentic_search`
+Combined agentic search with web, X, and code execution.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Query |
+| `use_web_search` | bool | True | Enable web search |
+| `use_x_search` | bool | True | Enable X search |
+| `use_code_execution` | bool | False | Enable Python code |
+| + all web_search and x_search params | | | |
+
+---
+
+### `code_executor`
+Execute Python code for calculations and analysis.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Task description |
+| `model` | str | `grok-4-1-fast` | Model |
+| `include_code_output` | bool | True | Return execution output |
+| `max_turns` | int | None | Limit turns |
+
+**Returns:** Content, tool_calls, code_outputs, usage
+
+---
+
+### `stateful_chat`
+Maintain conversation state across requests.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Your message |
+| `response_id` | str | None | Previous response ID |
+| `model` | str | `grok-4` | Model |
+| `system_prompt` | str | None | System instruction |
+
+**Returns:** Content, response_id, usage
+
+---
+
+### `retrieve_stateful_response`
+Retrieve a stored conversation.
+
+### `delete_stateful_response`
+Delete a stored conversation.
+
+---
+
   
 ## License
 
