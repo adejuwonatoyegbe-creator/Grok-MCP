@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 from xai_sdk import Client
-from xai_sdk.chat import user, system, image
+from xai_sdk.chat import user, system, image, file
 from xai_sdk.tools import web_search as xai_web_search, x_search as xai_x_search, code_execution
 from .utils import encode_image_to_base64, extract_usage, build_params, XAI_API_KEY
 
@@ -173,8 +173,7 @@ async def web_search(
     chat = client.chat.create(**chat_params)
     chat.append(user(prompt))
     
-    for response, chunk in chat.stream():
-        pass
+    response = chat.sample()
     
     result = {
         "content": response.content,
@@ -237,8 +236,7 @@ async def x_search(
     chat = client.chat.create(**chat_params)
     chat.append(user(prompt))
     
-    for response, chunk in chat.stream():
-        pass
+    response = chat.sample()
     
     result = {
         "content": response.content,
@@ -316,8 +314,7 @@ async def agentic_search(
     chat = client.chat.create(**chat_params)
     chat.append(user(prompt))
     
-    for response, chunk in chat.stream():
-        pass
+    response = chat.sample()
     
     result = {
         "content": response.content,
@@ -424,6 +421,122 @@ async def delete_stateful_response(response_id: str):
     client.chat.delete_stored_completion(response_id)
     client.close()
     return {"response_id": response_id, "deleted": True}
+
+
+@mcp.tool()
+async def upload_file(
+    file_path: str,
+    filename: Optional[str] = None
+):
+    client = Client(api_key=XAI_API_KEY)
+    
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found {file_path}")
+    
+    uploaded = client.files.upload(file_path)
+    client.close()
+    
+    return {
+        "file_id": uploaded.id,
+        "filename": uploaded.filename,
+        "size": uploaded.size,
+        "created_at": str(uploaded.created_at),
+    }
+
+
+@mcp.tool()
+async def list_files(
+    limit: int = 100,
+    order: str = "desc",
+    sort_by: str = "created_at"
+):
+    client = Client(api_key=XAI_API_KEY)
+    response = client.files.list(limit=limit, order=order, sort_by=sort_by)
+    client.close()
+    
+    return {
+        "files": [
+            {
+                "file_id": f.id,
+                "filename": f.filename,
+                "size": f.size,
+                "created_at": str(f.created_at),
+            }
+            for f in response.data
+        ]
+    }
+
+
+@mcp.tool()
+async def get_file(file_id: str):
+    client = Client(api_key=XAI_API_KEY)
+    file_info = client.files.get(file_id)
+    client.close()
+    
+    return {
+        "file_id": file_info.id,
+        "filename": file_info.filename,
+        "size": file_info.size,
+        "created_at": str(file_info.created_at),
+    }
+
+
+@mcp.tool()
+async def get_file_content(file_id: str, max_bytes: int = 500000):
+    client = Client(api_key=XAI_API_KEY)
+    content = client.files.content(file_id)
+    client.close()
+    
+    total_size = len(content)
+    truncated = total_size > max_bytes
+    
+    if truncated:
+        content = content[:max_bytes]
+    
+    return {
+        "file_id": file_id,
+        "content": content.decode("utf-8", errors="replace"),
+        "size": total_size,
+        "truncated": truncated,
+        "returned_bytes": len(content),
+    }
+
+
+@mcp.tool()
+async def delete_file(file_id: str):
+    client = Client(api_key=XAI_API_KEY)
+    delete_response = client.files.delete(file_id)
+    client.close()
+    
+    return {"file_id": delete_response.id, "deleted": delete_response.deleted}
+
+
+@mcp.tool()
+async def chat_with_files(
+    prompt: str,
+    file_ids: List[str],
+    model: str = "grok-4-1-fast",
+    system_prompt: Optional[str] = None
+):
+    client = Client(api_key=XAI_API_KEY)
+    chat = client.chat.create(model=model)
+    
+    if system_prompt:
+        chat.append(system(system_prompt))
+    
+    file_attachments = [file(fid) for fid in file_ids]
+    chat.append(user(prompt, *file_attachments))
+    
+    response = chat.sample()
+    
+    client.close()
+    
+    return {
+        "content": response.content,
+        "citations": list(response.citations) if response.citations else [],
+        "usage": extract_usage(response),
+    }
 
 
 def main():
