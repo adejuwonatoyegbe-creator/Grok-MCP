@@ -113,6 +113,7 @@ mcp dev main.py
 
 # Available Tools
 
+Note: For using images and files, you must provide paths to chat. See [Filesystem MCP (Optional)](#filesystem-mcp-optional) for setup.
 
 ### `list_models`
 List all available Grok models.
@@ -125,7 +126,7 @@ Standard chat completion.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Your message |
-| `model` | str | `grok-4` | Model to use |
+| `model` | str | grok-4 | Model to use |
 | `system_prompt` | str | None | System instruction |
 | `store_messages` | bool | False | Enable conversation history |
 
@@ -139,8 +140,8 @@ Analyze images with text.
 | `prompt` | str | required | Question about the image |
 | `image_paths` | List[str] | None | Local image file paths |
 | `image_urls` | List[str] | None | Image URLs |
-| `detail` | str | `auto` | `auto`, `low`, or `high` |
-| `model` | str | `grok-4` | Vision model |
+| `detail` | str | auto | auto, low, or high |
+| `model` | str | grok-4 | Vision model |
 
 **Returns:** Content + usage with `prompt_image_tokens`
 
@@ -152,8 +153,8 @@ Get detailed reasoning with the response.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Your question |
-| `model` | str | `grok-3-mini` | Reasoning model |
-| `reasoning_effort` | str | None | `low` or `high` |
+| `model` | str | grok-3-mini | Reasoning model |
+| `reasoning_effort` | str | None | low or high |
 
 **Returns:** Content, reasoning_content, usage (with reasoning_tokens)
 
@@ -166,8 +167,8 @@ Create images from text.
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Image description |
 | `n` | int | 1 | Number of images |
-| `image_format` | str | `url` | `url` or `b64_json` |
-| `model` | str | `grok-2-image-1212` | Image model |
+| `image_format` | str | url | url or b64_json |
+| `model` | str | grok-2-image-1212 | Image model |
 
 ---
 
@@ -177,7 +178,7 @@ Agentic web search with autonomous research.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Search query |
-| `model` | str | `grok-4-1-fast` | Model |
+| `model` | str | grok-4-1-fast | Model |
 | `allowed_domains` | List[str] | None | Restrict to domains (max 5) |
 | `excluded_domains` | List[str] | None | Exclude domains (max 5) |
 | `enable_image_understanding` | bool | False | Analyze images in results |
@@ -194,7 +195,7 @@ Agentic X (Twitter) search.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Search query |
-| `model` | str | `grok-4-1-fast` | Model |
+| `model` | str | grok-4-1-fast | Model |
 | `allowed_x_handles` | List[str] | None | Only these handles (max 10) |
 | `excluded_x_handles` | List[str] | None | Exclude handles (max 10) |
 | `from_date` | str | None | Start date (DD-MM-YYYY) |
@@ -208,16 +209,21 @@ Agentic X (Twitter) search.
 
 ---
 
-### `agentic_search`
-Combined agentic search with web, X, and code execution.
+### `grok_agent`
+Unified agent combining files, images, and all agentic tools (web search, X search, code execution).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `prompt` | str | required | Query |
-| `use_web_search` | bool | True | Enable web search |
-| `use_x_search` | bool | True | Enable X search |
-| `use_code_execution` | bool | False | Enable Python code |
+| `prompt` | str | required | Your query |
+| `file_ids` | List[str] | None | Uploaded file IDs to search |
+| `image_urls` | List[str] | None | Image URLs to analyze |
+| `image_paths` | List[str] | None | Local image paths |
+| `use_web_search` | bool | False | Enable web search |
+| `use_x_search` | bool | False | Enable X search |
+| `use_code_execution` | bool | False | Enable code execution |
 | + all web_search and x_search params | | | |
+
+**Returns:** Content, citations, tool_calls, code_outputs, uploaded_file_ids, usage
 
 ---
 
@@ -227,8 +233,7 @@ Execute Python code for calculations and analysis.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Task description |
-| `model` | str | `grok-4-1-fast` | Model |
-| `include_code_output` | bool | True | Return execution output |
+| `model` | str | grok-4-1-fast | Model |
 | `max_turns` | int | None | Limit turns |
 
 **Returns:** Content, tool_calls, code_outputs, usage
@@ -242,7 +247,7 @@ Maintain conversation state across requests.
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Your message |
 | `response_id` | str | None | Previous response ID |
-| `model` | str | `grok-4` | Model |
+| `model` | str | grok-4 | Model |
 | `system_prompt` | str | None | System instruction |
 
 **Returns:** Content, response_id, usage
@@ -252,8 +257,67 @@ Maintain conversation state across requests.
 ### `retrieve_stateful_response`
 Retrieve a stored conversation.
 
+---
+
 ### `delete_stateful_response`
 Delete a stored conversation.
+
+
+### `upload_file`
+Upload a document (max 48 MB).
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `file_path` | str | required | Local file path |
+
+**Supported formats:** .txt, .md, .py, .js, .csv, .json, .pdf, and more
+
+---
+
+### `list_files`
+List uploaded files with sorting.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 100 | Max files to return |
+| `order` | str | desc | asc or desc |
+| `sort_by` | str | created_at | created_at, filename, or size |
+
+---
+
+### `get_file`
+Get file metadata by ID.
+
+---
+
+### `get_file_content`
+Download file content by ID.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `file_id` | str | required | File ID |
+| `max_bytes` | int | 500000 | Max bytes to return |
+
+---
+
+### `delete_file`
+Delete a file by ID.
+
+---
+
+### `chat_with_files`
+Chat with uploaded documents using agentic document search.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Question about docs |
+| `file_ids` | List[str] | required | File IDs to search |
+| `model` | str | grok-4-1-fast | Model |
+| `system_prompt` | str | None | System instruction |
+
+Returns: Content, citations, usage
+
+
 
 ---
 
