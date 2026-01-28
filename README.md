@@ -1,6 +1,6 @@
 # Grok-MCP
 
-MCP server for xAI's Grok API with agentic tool calling, image generation, vision, and reasoning models.
+MCP server for xAI's Grok API with agentic tool calling, image generation, vision, and file support.
 
 
 <a href="https://glama.ai/mcp/servers/@merterbak/Grok-MCP">
