@@ -13,8 +13,8 @@ MCP server for xAI's Grok API with agentic tool calling, image and video generat
 - **Multiple Grok Models**: Access to Grok-4.1-Fast-Reasoning, Grok-4.1-Fast-Non-Reasoning, Grok-4-Fast, Grok-3-Mini, and more
 - **Image and Video Generation**: Create images and videos using Grok Imagine
 - **Vision Capabilities**: Analyze images with Grok's vision models
-- **Reasoning Models**: Advanced reasoning with extended thinking models (Grok-4.1-Fast-Reasoning, Grok-3-Mini, Grok-4)
-- **Stateful Conversations**: Use this newly released feature to maintain conversation context as id across multiple requests
+- **Files API**: Upload, manage, and chat with documents 
+- **Stateful Conversations**: Maintain conversation context as id across multiple requests
 
 ## Prerequisites
 
