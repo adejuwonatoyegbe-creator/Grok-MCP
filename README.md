@@ -69,6 +69,26 @@ Add this to your Claude Desktop configuration file:
 }
 ```
 
+### Claude Code Integration
+
+Run this command from inside the project directory:
+
+```bash
+claude mcp add grok-mcp -e XAI_API_KEY=your_api_key_here -- uv run --directory /path/to/Grok-MCP python -m src.server
+```
+
+Or if you have a `.env` file with your key:
+
+```bash
+claude mcp add grok-mcp -- uv run --directory /path/to/Grok-MCP python -m src.server
+```
+
+Verify it's registered:
+
+```bash
+claude mcp list
+```
+
 ### Filesystem MCP (Optional)
 
 Claude Desktop can't send uploaded images in the chat to an MCP tool.
