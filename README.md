@@ -15,6 +15,7 @@ MCP server for xAI's Grok API with agentic tool calling, image and video generat
 - **Vision Capabilities**: Analyze images with Grok's vision models
 - **Files API**: Upload, manage, and chat with documents 
 - **Stateful Conversations**: Maintain conversation context as id across multiple requests
+- **Local Chat History**: Option to save persistent client side chat history as JSON files in chats/
 
 ## Prerequisites
 
@@ -74,13 +75,13 @@ Add this to your Claude Desktop configuration file:
 Run this command from inside the project directory:
 
 ```bash
-claude mcp add grok-mcp -e XAI_API_KEY=your_api_key_here -- uv run --directory /path/to/Grok-MCP python -m src.server
+claude mcp add grok-mcp -e XAI_API_KEY=your_api_key_here -- uv run --directory /path/to/Grok-MCP python main.py
 ```
 
 Or if you have a `.env` file with your key:
 
 ```bash
-claude mcp add grok-mcp -- uv run --directory /path/to/Grok-MCP python -m src.server
+ claude mcp add grok-mcp -- uv run --directory /path/to/Grok-MCP python main.py
 ```
 
 Verify it's registered:
@@ -141,14 +142,14 @@ List all available Grok models.
 ---
 
 ### `chat`
-Standard chat completion.
+Standard chat completion with optional persistent history.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Your message |
+| `session` | str | None | Session name to save/load history |
 | `model` | str | grok-4 | Model to use |
 | `system_prompt` | str | None | System instruction |
-| `store_messages` | bool | False | Enable conversation history |
 
 ---
 
@@ -158,6 +159,7 @@ Analyze images with text.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Question about the image |
+| `session` | str | None | Session name to save/load history |
 | `model` | str | grok-4 | Vision model |
 | `image_paths` | List[str] | None | Local image file paths |
 | `image_urls` | List[str] | None | Image URLs |
@@ -241,6 +243,7 @@ Unified agent combining files, images, and all agentic tools (web search, X sear
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Your query |
+| `session` | str | None | Session name to save/load history |
 | `model` | str | grok-4-1-fast | Model |
 | `file_ids` | List[str] | None | Uploaded file IDs to search |
 | `image_urls` | List[str] | None | Image URLs to analyze |
@@ -338,11 +341,35 @@ Chat with uploaded documents using agentic document search.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Question about docs |
+| `session` | str | None | Session name to save/load history |
 | `model` | str | grok-4-1-fast | Model |
 | `file_ids` | List[str] | None | File IDs to search |
 | `system_prompt` | str | None | System instruction |
 
 Returns: Content, citations, usage
+
+---
+
+### `list_chat_sessions`
+List all saved chat sessions in `chats/`.
+
+---
+
+### `get_chat_history`
+Get the full message history for a session.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `session` | str | default | Session name |
+
+---
+
+### `clear_chat_history`
+Delete the history file for a session.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `session` | str | default | Session name |
 
 
 

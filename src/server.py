@@ -1,18 +1,87 @@
+import json
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 from xai_sdk import Client
-from xai_sdk.chat import user, system, image, file
+from xai_sdk.chat import user, system, assistant, image, file
 from xai_sdk.tools import web_search as xai_web_search, x_search as xai_x_search, code_execution
-from .utils import encode_image_to_base64, encode_video_to_base64, build_params, XAI_API_KEY
-
+from .utils import encode_image_to_base64, encode_video_to_base64, build_params, XAI_API_KEY, load_history, save_history
 
 mcp = FastMCP(name="Grok MCP Server")
 
 # Note: Tools return strings not dicts because if you return a dict it shows up as hard to read raw JSON (lines all side by side for result text output) in the Claude UI and Claude Code.
 
 # To Claude: return output URLs as clickable links
+
+@mcp.tool()
+async def chat(
+    prompt: str,
+    session: Optional[str] = None,
+    model: str = "grok-4",
+    system_prompt: Optional[str] = None,
+):
+    history = load_history(session) if session else []
+
+    client = Client(api_key=XAI_API_KEY)
+    grok = client.chat.create(model=model)
+    if system_prompt:
+        grok.append(system(system_prompt))
+
+    for message in history:
+        if message["role"] == "user":
+            grok.append(user(message["content"]))
+        elif message["role"] == "assistant":
+            grok.append(assistant(message["content"]))
+
+    grok.append(user(prompt))
+    response = grok.sample()
+    client.close()
+
+    if session:
+        history.append({"role": "user", "content": prompt, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        save_history(session, history)
+
+    return response.content
+
+
+@mcp.tool()
+async def list_chat_sessions():
+    Path("chats").mkdir(exist_ok=True)
+    sessions = sorted(Path("chats").glob("*.json"))
+    if not sessions:
+        return "No chat sessions found."
+    result = ["**Chat Sessions:**\n"]
+    for s in sessions:
+        history = json.loads(s.read_text())
+        turns = len(history) // 2
+        last = history[-1]["time"] if history else "empty"
+        result.append(f"- `{s.stem}` — {turns} turn(s), last: {last}")
+    return "\n".join(result)
+
+
+@mcp.tool()
+async def get_chat_history(session: str = "default"):
+    history = load_history(session)
+    if not history:
+        return f"No history found for session `{session}`."
+    result = [f"**Chat History: `{session}`**\n"]
+    for message in history:
+        role = message["role"].capitalize()
+        time = message["time"]
+        result.append(f"**[{time}] {role}:** {message['content']}\n")
+    return "\n".join(result)
+
+
+@mcp.tool()
+async def clear_chat_history(session: str = "default"):
+    path = Path("chats") / f"{session}.json"
+    if not path.exists():
+        return f"No session `{session}` found."
+    path.unlink()
+    return f"Cleared history for session `{session}`."
+
 
 @mcp.tool()
 async def list_models():
@@ -120,15 +189,23 @@ async def generate_video(
 @mcp.tool()
 async def chat_with_vision(
     prompt: str,
+    session: Optional[str] = None,
     model: str = "grok-4",
     image_paths: Optional[List[str]] = None,
     image_urls: Optional[List[str]] = None,
     detail: str = "auto"
 ):
+    history = load_history(session) if session else []
 
     client = Client(api_key=XAI_API_KEY)
     chat = client.chat.create(model=model, store_messages=False)
-    
+
+    for message in history:
+        if message["role"] == "user":
+            chat.append(user(message["content"]))
+        elif message["role"] == "assistant":
+            chat.append(assistant(message["content"]))
+
     user_content = []
     if image_paths:
         for path in image_paths:
@@ -137,37 +214,22 @@ async def chat_with_vision(
                 raise ValueError(f"Unsupported image type: {ext}")
             base64_img = encode_image_to_base64(path)
             user_content.append(image(image_url=f"data:image/{ext};base64,{base64_img}", detail=detail))
-    
+
     if image_urls:
         for url in image_urls:
             user_content.append(image(image_url=url, detail=detail))
-    
+
     user_content.append(prompt)
     chat.append(user(*user_content))
     response = chat.sample()
     client.close()
-    
-    return response.content
 
-
-@mcp.tool()
-async def chat(
-    prompt: str,
-    model: str = "grok-4",
-    system_prompt: Optional[str] = None,
-    store_messages: bool = False
-):
-
-    client = Client(api_key=XAI_API_KEY)
-    chat = client.chat.create(model=model, store_messages=store_messages)
-    if system_prompt:
-        chat.append(system(system_prompt))
-    chat.append(user(prompt))
-    response = chat.sample()
-    client.close()
+    if session:
+        history.append({"role": "user", "content": prompt, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        save_history(session, history)
 
     return response.content
-
 
 @mcp.tool()
 async def web_search(
@@ -304,6 +366,7 @@ async def code_executor(
 @mcp.tool()
 async def grok_agent(
     prompt: str,
+    session: Optional[str] = None,
     model: str = "grok-4-1-fast",
     file_ids: Optional[List[str]] = None,
     image_urls: Optional[List[str]] = None,
@@ -323,6 +386,8 @@ async def grok_agent(
     system_prompt: Optional[str] = None,
     max_turns: Optional[int] = None
 ):
+    history = load_history(session) if session else []
+
     client = Client(api_key=XAI_API_KEY)
     
     tools = []
@@ -359,10 +424,16 @@ async def grok_agent(
         chat_params["max_turns"] = max_turns
     
     chat = client.chat.create(**chat_params)
-    
+
     if system_prompt:
         chat.append(system(system_prompt))
-    
+
+    for message in history:
+        if message["role"] == "user":
+            chat.append(user(message["content"]))
+        elif message["role"] == "assistant":
+            chat.append(assistant(message["content"]))
+
     content_items = []
     
     if file_ids:
@@ -382,8 +453,12 @@ async def grok_agent(
     content_items.append(prompt)
     chat.append(user(*content_items))
     response = chat.sample()
-    
     client.close()
+
+    if session:
+        history.append({"role": "user", "content": prompt, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        save_history(session, history)
 
     result = [response.content]
     if response.citations:
@@ -509,22 +584,35 @@ async def delete_file(file_id: str):
 @mcp.tool()
 async def chat_with_files(
     prompt: str,
+    session: Optional[str] = None,
     model: str = "grok-4-1-fast",
     file_ids: List[str] = None,
     system_prompt: Optional[str] = None
 ):
+    history = load_history(session) if session else []
+
     client = Client(api_key=XAI_API_KEY)
     chat = client.chat.create(model=model)
-    
+
     if system_prompt:
         chat.append(system(system_prompt))
-    
+
+    for message in history:
+        if message["role"] == "user":
+            chat.append(user(message["content"]))
+        elif message["role"] == "assistant":
+            chat.append(assistant(message["content"]))
+
     file_attachments = [file(fid) for fid in file_ids]
     chat.append(user(prompt, *file_attachments))
     response = chat.sample()
-    
     client.close()
-    
+
+    if session:
+        history.append({"role": "user", "content": prompt, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
+        save_history(session, history)
+
     result = [response.content]
     if response.citations:
         result.append("\n\n**Sources:**")

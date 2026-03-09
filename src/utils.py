@@ -1,4 +1,5 @@
 import os
+import json
 import base64
 from pathlib import Path
 from dotenv import load_dotenv
@@ -36,6 +37,18 @@ def extract_usage(response):
         "reasoning_tokens": response.usage.reasoning_tokens,
         "total_tokens": response.usage.total_tokens,
     }
+
+def load_history(session: str):
+    path = Path("chats") / f"{session}.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return []
+
+
+def save_history(session: str, history: list):
+    Path("chats").mkdir(exist_ok=True)
+    (Path("chats") / f"{session}.json").write_text(json.dumps(history, indent=2, ensure_ascii=False))
+
 
 def build_params(**kwargs):
     result = {}
