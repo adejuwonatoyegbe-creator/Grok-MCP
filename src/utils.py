@@ -4,11 +4,9 @@ import base64
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv("example.env")
 
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-if XAI_API_KEY:
-    os.environ["XAI_API_KEY"] = XAI_API_KEY
 
 
 def encode_image_to_base64(image_path: str):
