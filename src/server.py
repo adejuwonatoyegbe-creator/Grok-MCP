@@ -22,11 +22,15 @@ async def chat(
     session: Optional[str] = None,
     model: str = "grok-4-1-fast-reasoning",
     system_prompt: Optional[str] = None,
+    agent_count: Optional[int] = None,
 ):
     history = load_history(session) if session else []
 
     client = Client(api_key=XAI_API_KEY)
-    grok = client.chat.create(model=model)
+    chat_params = {"model": model}
+    if agent_count:
+        chat_params["agent_count"] = agent_count
+    grok = client.chat.create(**chat_params)
     if system_prompt:
         grok.append(system(system_prompt))
 
@@ -114,35 +118,43 @@ async def list_models():
 async def generate_image(
     prompt: str,
     model: str = "grok-imagine-image",
-    image_path: Optional[str] = None,
-    image_url: Optional[str] = None,
+    image_paths: Optional[List[str]] = None,
+    image_urls: Optional[List[str]] = None,
     n: int = 1,
     image_format: str = "url",
-    aspect_ratio: Optional[str] = None
+    aspect_ratio: Optional[str] = None,
+    resolution: Optional[str] = None,
 ):
-    
+
     client = Client(api_key=XAI_API_KEY)
-    
+
     params = {"model": model, "prompt": prompt, "n": n, "image_format": image_format}
-    
-    if image_path:
-        base64_string = encode_image_to_base64(image_path)
-        ext = Path(image_path).suffix.lower().replace('.', '')
-        params["image_url"] = f"data:image/{ext};base64,{base64_string}"
-    elif image_url:
-        params["image_url"] = image_url
-    
+
+    refs = []
+    if image_paths:
+        for path in image_paths:
+            base64_string = encode_image_to_base64(path)
+            ext = Path(path).suffix.lower().replace('.', '')
+            refs.append(f"data:image/{ext};base64,{base64_string}")
+    if image_urls:
+        refs.extend(image_urls)
+
+    if refs:
+        params["image_urls"] = refs
+
     if aspect_ratio:
         params["aspect_ratio"] = aspect_ratio
-    
+    if resolution:
+        params["resolution"] = resolution
+
     images = client.image.sample_batch(**params)
     client.close()
 
-    result = ["## Generated Image(s)"]
+    result = ["## Generated Image(s)\n\n"]
     for i, img in enumerate(images, 1):
-        result.append(f"\n**Image {i}:** {img.url}")
+        result.append(f"\n**Image {i}:** {img.url}\n\n")
         if img.prompt and img.prompt != prompt:
-            result.append(f"*Revised prompt:* {img.prompt}")
+            result.append(f"*Revised prompt:* {img.prompt}\n\n")
     return "\n".join(result)
 
 
@@ -190,10 +202,27 @@ async def generate_video(
     response = client.video.generate(**params)
     client.close()
 
-    result = [f"## Generated Video\n\n**URL:** {response.url}"]
-    if hasattr(response, 'duration') and response.duration:
-        result.append(f"**Duration:** {response.duration}s")
-    return "\n".join(result)
+    return f"## Generated Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n"
+
+
+@mcp.tool()
+async def extend_video(
+    prompt: str,
+    video_url: str,
+    model: str = "grok-imagine-video",
+    duration: Optional[int] = None,
+):
+    client = Client(api_key=XAI_API_KEY)
+
+    params = {"model": model, "prompt": prompt, "video_url": video_url}
+    if duration:
+        params["duration"] = duration
+
+    response = client.video.extend(**params)
+    client.close()
+
+    return f"## Extended Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n"
+
 
 @mcp.tool()
 async def chat_with_vision(
@@ -393,12 +422,13 @@ async def grok_agent(
     enable_video_understanding: bool = False,
     include_inline_citations: bool = False,
     system_prompt: Optional[str] = None,
-    max_turns: Optional[int] = None
+    max_turns: Optional[int] = None,
+    agent_count: Optional[int] = None,
 ):
     history = load_history(session) if session else []
 
     client = Client(api_key=XAI_API_KEY)
-    
+
     tools = []
     if use_web_search:
         web_params = build_params(
@@ -431,7 +461,9 @@ async def grok_agent(
         chat_params["tools"] = tools
     if max_turns:
         chat_params["max_turns"] = max_turns
-    
+    if agent_count:
+        chat_params["agent_count"] = agent_count
+
     chat = client.chat.create(**chat_params)
 
     if system_prompt:
@@ -521,16 +553,13 @@ async def delete_stateful_response(response_id: str):
 
 
 @mcp.tool()
-async def upload_file(
-    file_path: str,
-    filename: Optional[str] = None
-):
+async def upload_file(file_path: str):
     client = Client(api_key=XAI_API_KEY)
-    
+
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found {file_path}")
-    
+
     uploaded = client.files.upload(file_path)
     client.close()
     
@@ -593,9 +622,9 @@ async def delete_file(file_id: str):
 @mcp.tool()
 async def chat_with_files(
     prompt: str,
+    file_ids: List[str],
     session: Optional[str] = None,
     model: str = "grok-4-1-fast-reasoning",
-    file_ids: List[str] = None,
     system_prompt: Optional[str] = None
 ):
     history = load_history(session) if session else []

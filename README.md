@@ -138,6 +138,7 @@ Note: For using images and files, you must provide paths to chat. See [Filesyste
 
 ### `list_models`
 List all available Grok models with pricing.
+
 ---
 
 ### `chat`
@@ -149,6 +150,7 @@ Standard chat completion with optional persistent history.
 | `session` | str | None | Session name to save/load history |
 | `model` | str | grok-4-1-fast-reasoning | Model to use |
 | `system_prompt` | str | None | System instruction |
+| `agent_count` | int | None | 4 or 16 for multi-agent models (grok-4.20-multi-agent) |
 
 ---
 
@@ -169,16 +171,17 @@ Analyze images with text.
 ---
 
 ### `generate_image`
-Create or edit images from text.
+Create or edit images from text. Supports multiple editing by passing paths or URLs.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `prompt` | str | required | Image description or edit instruction |
-| `model` | str | grok-imagine-image | Image model |
-| `image_path` | str | None | Local image path to edit |
-| `image_url` | str | None | Image URL to edit |
+| `model` | str | grok-imagine-image | Image model (grok-imagine-image, grok-imagine-image-pro) |
+| `image_paths` | List[str] | None | Local image paths for reference/edit |
+| `image_urls` | List[str] | None | Image URLs for reference or edit |
 | `n` | int | 1 | Number of images (1-10) |
 | `aspect_ratio` | str | None | like "16:9", "1:1" |
+| `resolution` | str | None | "1k" or "2k" |
 
 ---
 
@@ -196,6 +199,18 @@ Create or edit videos from text, images, or existing videos.
 | `duration` | int | None | Duration in seconds (1-15) |
 | `aspect_ratio` | str | None | like "16:9", "4:3" |
 | `resolution` | str | None | "720p" or "480p" |
+
+---
+
+### `extend_video`
+Extend an existing generated video with a follow up prompt.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | str | required | Description for the extension |
+| `video_url` | str | required | URL of video to extend |
+| `model` | str | grok-imagine-video | Video model |
+| `duration` | int | None | Extension duration in seconds |
 
 ---
 
@@ -250,6 +265,7 @@ Unified agent combining files, images, and all agentic tools (web search, X sear
 | `use_web_search` | bool | False | Enable web search |
 | `use_x_search` | bool | False | Enable X search |
 | `use_code_execution` | bool | False | Enable code execution |
+| `agent_count` | int | None | 4 or 16 for multi agent models |
 | + all web_search and x_search params | | | |
 
 **Returns:** Content, citations, tool_calls, code_outputs, uploaded_file_ids, usage
