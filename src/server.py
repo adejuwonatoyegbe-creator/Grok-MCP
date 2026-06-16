@@ -7,7 +7,7 @@ from mcp.types import ToolAnnotations
 from xai_sdk import Client
 from xai_sdk.chat import user, system, assistant, image, file
 from xai_sdk.tools import web_search as xai_web_search, x_search as xai_x_search, code_execution
-from .utils import encode_image_to_base64, encode_video_to_base64, build_params, XAI_API_KEY, load_history, save_history
+from .utils import encode_image_to_base64, encode_video_to_base64, build_params, usage_footer, XAI_API_KEY, load_history, save_history
 
 mcp = FastMCP(name="Grok MCP Server")
 READONLY = ToolAnnotations(readOnlyHint=True)
@@ -37,7 +37,7 @@ async def chat(
         agent_count: 4 or 16. Only valid with `grok-4.20-multi-agent` for multi-agent research.
 
     Returns:
-        The assistant's reply text.
+        The assistant's reply text, followed by a token usage and cost footer.
     """
     history = load_history(session) if session else []
 
@@ -64,7 +64,7 @@ async def chat(
         history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
         save_history(session, history)
 
-    return response.content
+    return response.content + usage_footer(response)
 
 
 @mcp.tool(annotations=READONLY)
@@ -216,7 +216,7 @@ async def generate_image(
         result.append(f"\n**Image {i}:** {img.url}\n\n")
         if img.prompt and img.prompt != prompt:
             result.append(f"*Revised prompt:* {img.prompt}\n\n")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(*images)
 
 
 @mcp.tool()
@@ -227,6 +227,8 @@ async def generate_video(
     image_url: Optional[str] = None,
     video_path: Optional[str] = None,
     video_url: Optional[str] = None,
+    reference_image_paths: Optional[List[str]] = None,
+    reference_image_urls: Optional[List[str]] = None,
     duration: Optional[int] = None,
     aspect_ratio: Optional[str] = None,
     resolution: Optional[str] = None
@@ -234,8 +236,9 @@ async def generate_video(
     """Generate or edit videos with Grok Imagine.
 
     Text-to-video by default. Provide an image to animate (image-to-video), or
-    a source video to edit. Only one mode per call. Generation polls
-    synchronously (xAI's default timeout is 10 minutes).
+    a source video to edit. Only one mode per call. Reference images can be
+    added to guide style and subjects. Generation polls synchronously (xAI's
+    default timeout is 10 minutes).
 
     Args:
         prompt: Video description, or the edit instruction for video editing.
@@ -244,12 +247,14 @@ async def generate_video(
         image_url: Public image URL to use as the starting frame.
         video_path: Local video to edit (max 20 MB, .mp4, ≤ 8.7s).
         video_url: Public video URL to edit (.mp4, ≤ 8.7s).
+        reference_image_paths: Local images used as style/subject references.
+        reference_image_urls: Public image URLs used as style/subject references.
         duration: Video length in seconds (1–15, ignored when editing).
         aspect_ratio: Aspect ratio like `"16:9"` or `"9:16"` (ignored when editing).
         resolution: `"480p"` or `"720p"` (ignored when editing).
 
     Returns:
-        Markdown block with the generated video URL and actual duration.
+        Markdown block with the generated video URL, actual duration, and a cost footer.
     """
     client = Client(api_key=XAI_API_KEY)
 
@@ -271,7 +276,18 @@ async def generate_video(
         params["video_url"] = f"data:video/{ext};base64,{base64_string}"
     elif video_url:
         params["video_url"] = video_url
-    
+
+    refs = []
+    if reference_image_paths:
+        for path in reference_image_paths:
+            base64_string = encode_image_to_base64(path)
+            ext = Path(path).suffix.lower().replace('.', '')
+            refs.append(f"data:image/{ext};base64,{base64_string}")
+    if reference_image_urls:
+        refs.extend(reference_image_urls)
+    if refs:
+        params["reference_image_urls"] = refs
+
     if duration:
         params["duration"] = duration
     if aspect_ratio:
@@ -282,7 +298,7 @@ async def generate_video(
     response = client.video.generate(**params)
     client.close()
 
-    return f"## Generated Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n"
+    return f"## Generated Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n" + usage_footer(response)
 
 
 @mcp.tool()
@@ -316,7 +332,7 @@ async def extend_video(
     response = client.video.extend(**params)
     client.close()
 
-    return f"## Extended Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n"
+    return f"## Extended Video\n\n\n**URL:** {response.url}\n\n\n**Duration:** {response.duration}s\n\n" + usage_footer(response)
 
 
 @mcp.tool()
@@ -378,7 +394,7 @@ async def chat_with_vision(
         history.append({"role": "assistant", "content": response.content, "time": datetime.now().strftime("%d.%m.%Y %H:%M:%S")})
         save_history(session, history)
 
-    return response.content
+    return response.content + usage_footer(response)
 
 @mcp.tool(annotations=READONLY)
 async def web_search(
@@ -387,6 +403,7 @@ async def web_search(
     allowed_domains: Optional[List[str]] = None,
     excluded_domains: Optional[List[str]] = None,
     enable_image_understanding: bool = False,
+    enable_image_search: bool = False,
     include_inline_citations: bool = False,
     max_turns: Optional[int] = None
 ):
@@ -401,6 +418,7 @@ async def web_search(
         allowed_domains: Restrict search to these domains (max 5, mutually exclusive with excluded).
         excluded_domains: Exclude these domains from search (max 5).
         enable_image_understanding: Let the agent analyze images it encounters.
+        enable_image_search: Let the agent search for and return image results.
         include_inline_citations: Embed `[1]`-style citation markers into the answer text.
         max_turns: Cap the agent's reasoning/tool turns.
 
@@ -420,6 +438,7 @@ async def web_search(
         allowed_domains=allowed_domains,
         excluded_domains=excluded_domains,
         enable_image_understanding=enable_image_understanding,
+        enable_image_search=enable_image_search,
     )
     
     include_options = []
@@ -443,7 +462,7 @@ async def web_search(
         result.append("\n\n**Sources:**")
         for url in response.citations:
             result.append(f"- {url}")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(response)
 
 
 @mcp.tool(annotations=READONLY)
@@ -518,7 +537,7 @@ async def x_search(
         result.append("\n\n**Sources:**")
         for url in response.citations:
             result.append(f"- {url}")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(response)
 
 
 @mcp.tool()
@@ -557,7 +576,7 @@ async def code_executor(
         result.append("\n\n**Code Output(s):**")
         for output in response.tool_outputs:
             result.append(f"```\n{output.message.content}\n```")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(response)
 
 
 @mcp.tool()
@@ -579,6 +598,7 @@ async def grok_agent(
     to_date: Optional[str] = None,
     enable_image_understanding: bool = False,
     enable_video_understanding: bool = False,
+    enable_image_search: bool = False,
     include_inline_citations: bool = False,
     system_prompt: Optional[str] = None,
     max_turns: Optional[int] = None,
@@ -608,6 +628,7 @@ async def grok_agent(
         to_date: X search inclusive end date as `DD-MM-YYYY`.
         enable_image_understanding: Let search tools analyze images they encounter.
         enable_video_understanding: Let X search analyze videos in posts.
+        enable_image_search: Let web search find and return image results.
         include_inline_citations: Embed `[1]`-style citation markers into the answer.
         system_prompt: Optional system instruction prepended to the conversation.
         max_turns: Cap the agent's reasoning/tool turns.
@@ -626,6 +647,7 @@ async def grok_agent(
             allowed_domains=allowed_domains,
             excluded_domains=excluded_domains,
             enable_image_understanding=enable_image_understanding,
+            enable_image_search=enable_image_search,
         )
         tools.append(xai_web_search(**web_params))
     
@@ -697,7 +719,7 @@ async def grok_agent(
         result.append("\n\n**Sources:**")
         for url in response.citations:
             result.append(f"- {url}")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(response)
 
 
 @mcp.tool()
@@ -734,8 +756,8 @@ async def stateful_chat(
     
     response = chat.sample()
     client.close()
-    
-    return f"{response.content}\n\n**Response ID:** `{response.id}`"
+
+    return f"{response.content}\n\n**Response ID:** `{response.id}`" + usage_footer(response)
 
 
 @mcp.tool(annotations=READONLY)
@@ -774,7 +796,7 @@ async def delete_stateful_response(response_id: str):
 
 
 @mcp.tool()
-async def upload_file(file_path: str):
+async def upload_file(file_path: str, expires_after: Optional[int] = None):
     """Upload a local file to xAI so it can be attached to later chats.
 
     Supported types include PDFs and text documents (see xAI file docs). The
@@ -782,6 +804,8 @@ async def upload_file(file_path: str):
 
     Args:
         file_path: Absolute or relative path to the local file.
+        expires_after: Optional TTL in seconds. The file is deleted from xAI
+            automatically once it expires (omit to keep the file indefinitely).
 
     Returns:
         Markdown block with the assigned file ID, filename, and size.
@@ -792,10 +816,17 @@ async def upload_file(file_path: str):
     if not path.exists():
         raise FileNotFoundError(f"File not found {file_path}")
 
-    uploaded = client.files.upload(file_path)
+    upload_params = {}
+    if expires_after:
+        upload_params["expires_after"] = expires_after
+
+    uploaded = client.files.upload(file_path, **upload_params)
     client.close()
-    
-    return f"**File uploaded successfully**\n- **File ID:** `{uploaded.id}`\n- **Filename:** {uploaded.filename}\n- **Size:** {uploaded.size} bytes"
+
+    result = f"**File uploaded successfully**\n- **File ID:** `{uploaded.id}`\n- **Filename:** {uploaded.filename}\n- **Size:** {uploaded.size} bytes"
+    if expires_after:
+        result += f"\n- **Expires after:** {expires_after} seconds"
+    return result
 
 
 @mcp.tool(annotations=READONLY)
@@ -941,7 +972,7 @@ async def chat_with_files(
         result.append("\n\n**Sources:**")
         for url in response.citations:
             result.append(f"- {url}")
-    return "\n".join(result)
+    return "\n".join(result) + usage_footer(response)
 
 
 def main():

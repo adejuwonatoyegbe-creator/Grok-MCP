@@ -25,16 +25,31 @@ def encode_video_to_base64(video_path: str):
         return base64.b64encode(video_file.read()).decode("utf-8")
 
 
-def extract_usage(response):
-    
-    if not response.usage:
-        return {}
-    return {
-        "prompt_tokens": response.usage.prompt_tokens,
-        "completion_tokens": response.usage.completion_tokens,
-        "reasoning_tokens": response.usage.reasoning_tokens,
-        "total_tokens": response.usage.total_tokens,
-    }
+def usage_footer(*responses):
+    prompt_tokens = completion_tokens = reasoning_tokens = 0
+    cost = 0.0
+    has_cost = False
+    for response in responses:
+        usage = response.usage
+        if usage:
+            prompt_tokens += usage.prompt_tokens
+            completion_tokens += usage.completion_tokens
+            reasoning_tokens += usage.reasoning_tokens
+        if response.cost_usd is not None:
+            cost += response.cost_usd
+            has_cost = True
+
+    parts = []
+    if prompt_tokens or completion_tokens:
+        tokens = f"**Tokens:** {prompt_tokens:,} in / {completion_tokens:,} out"
+        if reasoning_tokens:
+            tokens += f" ({reasoning_tokens:,} reasoning)"
+        parts.append(tokens)
+    if has_cost:
+        parts.append(f"**Cost:** ${cost:.4f}")
+    if not parts:
+        return ""
+    return "\n\n---\n" + " · ".join(parts)
 
 def load_history(session: str):
     path = Path("chats") / f"{session}.json"
